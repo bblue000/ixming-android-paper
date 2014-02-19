@@ -22,6 +22,11 @@ public class PagerViewContainer extends ViewGroup {
 
 	private static final String TAG = "yytest";
 	
+	private final int STATE_VIEWPAGER = 0x1;
+	private final int STATE_SCALEPAGER = 0x2;
+	private int mPagerState = STATE_VIEWPAGER;
+	
+	
 	private final float SCALE_MAXIMUM = Float.MAX_VALUE;
 	private final float SCALE_MINIMUM = 1F - 0.618F;
 	private final float SCALE_INIT = 1F;
@@ -96,13 +101,27 @@ public class PagerViewContainer extends ViewGroup {
 		try {
 			if (MotionEvent.ACTION_DOWN == event.getAction()) {
 				//TODO 辅助，虽然基本没有作用，但是为了心里安慰...
-				clearAnimation();
+				if (canSwitchGestureType(GESTURE_NONE)) {
+					
+				}
 			}
 			return super.onTouchEvent(event) | mGestureDetector.onTouchEvent(event);
 		} finally {
 			if (MotionEvent.ACTION_CANCEL == event.getAction() || MotionEvent.ACTION_UP == event.getAction()) {
 				//TODO 
-				checkScrollAndScaleBounds();
+				switch (mPagerState) {
+					case STATE_SCALEPAGER: {
+						checkScrollAndScaleBounds();
+						break;
+					}
+					default: {
+						if (canSwitchGestureType(GESTURE_SCROLL)) {
+							checkViewPagerScrollBounds();
+						}
+						break;
+					}
+				}
+				
 			}
 		}
 	}
@@ -110,6 +129,82 @@ public class PagerViewContainer extends ViewGroup {
 	private final FloatPoint mCachePoint = new FloatPoint();
 	private final float[] mMatrixValues = new float[9];
 	private final FloatPoint mScalePoint = new FloatPoint();
+	
+	private final int GESTURE_NONE = 0;
+	private final int GESTURE_SCROLL = 1;
+	private final int GESTURE_FLING = 2;
+	private int mGestureType = GESTURE_NONE;
+	private boolean canSwitchGestureType(int gestureType) {
+		switch (gestureType) {
+		case GESTURE_SCROLL:
+			if (mGestureType <= gestureType) {
+				mGestureType = gestureType;
+				clearAnimation();
+				return true;
+			}
+			break;
+		case GESTURE_FLING:
+			mGestureType = gestureType;
+			clearAnimation();
+			return true;
+		case GESTURE_NONE:
+		default:
+			mGestureType = gestureType;
+			clearAnimation();
+			return true;
+		}
+		return false;
+	}
+	
+	private void checkViewPagerScrollBounds() {
+		float curScrollX = getScrollX();
+		
+		float pageWidth = mPagerView.getPageWidth();
+		float pageSpacing = mPagerView.getPageSpacing();
+		
+		float d = curScrollX / (pageWidth + pageSpacing);
+		int targetPage = Math.min((int) (d + 0.5F), mPagerView.getChildCount() - 1);
+		scrollToPage(targetPage);
+	}
+	
+	private void checkViewPagerFlingBounds(float vx, float vy) {
+		float absVx = Math.abs(vx);
+		if (absVx <= 1000) {
+			return ;
+		}
+		if (!canSwitchGestureType(GESTURE_FLING)) {
+			return ;
+		}
+		float curScrollX = getScrollX();
+		
+		float pageWidth = mPagerView.getPageWidth();
+		float pageSpacing = mPagerView.getPageSpacing();
+		float d = curScrollX / (pageWidth + pageSpacing);
+		int curPage = Math.min((int) (d), mPagerView.getChildCount() - 1);
+		if (vx < 0) {
+			scrollToPage(curPage + 1);
+		} else {
+			scrollToPage(curPage);
+		}
+	}
+	
+	private void scrollToPage(int page) {
+		page = Math.max(0, page);
+		page = Math.min(page, mPagerView.getChildCount() - 1);
+		
+		float curScrollX = getScrollX();
+		float curScrollY = getScrollY();
+		
+		float pageWidth = mPagerView.getPageWidth();
+		float pageSpacing = mPagerView.getPageSpacing();
+		
+		int targetScrollX = ViewProperties.getAsInt(page * (pageWidth + pageSpacing));
+		
+		ScrollAnim anim = new ScrollAnim(curScrollX, targetScrollX, curScrollY, curScrollY);
+		anim.setDuration(400);
+		startAnimation(anim);
+	}
+	
 	private void checkScrollAndScaleBounds() {
 		mCachePoint.set(0, 0);
 		float curScale = recalculateCurrentScale();
@@ -160,17 +255,19 @@ public class PagerViewContainer extends ViewGroup {
 	}
 	
 	private class GestureListenerImpl extends SimpleOnGestureListener {
+		private final float SCROLL_FACTOR = 0.6f;
+		private final float STATE_FACTOR = 2f;
+		
 		/**
 		 * 用于手势期间判断是否有过多点触摸，如果有，在下一次的单点触摸时，重新计算TouchRoute
 		 */
 		private boolean mIsLastMultiPointer = false;
+		private boolean mIsPagerStateChecked = false;
 		/**
 		 * 描述手势路径
 		 */
 		private final FloatRoute mTouchRoute = new FloatRoute();
 		private final FloatPoint mDownPoint = new FloatPoint();
-		private final FloatPoint mDeltaPoint = new FloatPoint();
-		
 		private float mDownScale = SCALE_INIT;
 		@Override
 		public boolean onDown(MotionEvent e) {
@@ -191,10 +288,31 @@ public class PagerViewContainer extends ViewGroup {
 				} else {
 					mTouchRoute.setCurrent(x, y);
 					float dx = mTouchRoute.getDeltaX();
+					float dy = mTouchRoute.getDeltaY();
 					
-					float scale = mDownScale * calculateScale(mTouchRoute.getTotalDeltaY());
-					tranferToScaleTo(scale, mScalePoint.x, mScalePoint.y, true);
-					tranferToScrollBy(dx, 0);
+					//TODO check and determine current pager state
+					if (!mIsPagerStateChecked) {
+						if (Math.abs(dx / dy) > STATE_FACTOR && (mDownScale == SCALE_INIT || mDownScale == SCALE_MINIMUM)) {
+							mPagerState = STATE_VIEWPAGER;
+						} else {
+							mPagerState = STATE_SCALEPAGER;
+						}
+						mIsPagerStateChecked = true;
+					}
+					
+					switch (mPagerState) {
+						case STATE_SCALEPAGER: {
+							float scale = mDownScale * calculateScale(mTouchRoute.getTotalDeltaY());
+							tranferToScaleTo(scale, mScalePoint.x, mScalePoint.y, true);
+							tranferToScrollBy(dx * SCROLL_FACTOR, 0);
+							break;
+						}
+						case STATE_VIEWPAGER:
+						default: {
+							tranferToScrollBy(dx * SCROLL_FACTOR, 0);
+							break;
+						}
+					}
 				}
 				return true;
 			}
@@ -205,7 +323,8 @@ public class PagerViewContainer extends ViewGroup {
 		@Override
 		public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX,
 				float velocityY) {
-			return super.onFling(e1, e2, velocityX, velocityY);
+			checkViewPagerFlingBounds(velocityX, velocityY);
+			return true;
 		}
 		
 		private void onConsideredDown(MotionEvent e) {
@@ -216,6 +335,8 @@ public class PagerViewContainer extends ViewGroup {
 			mScalePoint.set(x + getScrollX(), getHeight());
 			
 			mDownScale = recalculateCurrentScale();
+			
+			mIsPagerStateChecked = false;
 		}
 	}
 	

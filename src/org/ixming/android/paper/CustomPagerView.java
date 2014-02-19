@@ -1,7 +1,5 @@
 package org.ixming.android.paper;
 
-import java.util.ArrayList;
-
 import org.ixming.android.view.ViewUtils;
 
 import android.content.Context;
@@ -54,6 +52,11 @@ public class CustomPagerView extends ViewGroup {
 		
 		currentView = inflater.inflate(R.layout.pager_item, this, false);
 		addView(currentView);
+	}
+	
+	@Override
+	public void setPadding(int left, int top, int right, int bottom) {
+		// do nothing
 	}
 	
 	@Override
